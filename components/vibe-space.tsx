@@ -54,10 +54,14 @@ export default function VibeSpace() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [score, setScore] = useState(0)
   const [gameOver, setGameOver] = useState(false)
+  const [shieldActive, setShieldActive] = useState(true)
+  const [shieldCooldown, setShieldCooldown] = useState(0)
 
   // Use refs for values that shouldn't trigger re-renders
   const scoreRef = useRef(0)
   const gameOverRef = useRef(false)
+  const shieldActiveRef = useRef(true)
+  const lastShieldAbsorbRef = useRef(0)
 
   useEffect(() => {
     // Update the ref when state changes
@@ -84,6 +88,7 @@ export default function VibeSpace() {
     const shakeDecay = 0.9
     let shakeOffsetX = 0
     let shakeOffsetY = 0
+    const SHIELD_COOLDOWN_MS = 5000 // 5 seconds cooldown
 
     // Create stars for background
     const stars: Star[] = []
@@ -328,6 +333,35 @@ export default function VibeSpace() {
       // Draw engine particles
       drawEngineParticles()
 
+      // Draw shield if active
+      if (shieldActiveRef.current) {
+        ctx.save()
+        const shieldRadius = Math.max(player.width, player.height) * 0.8
+        const gradient = ctx.createRadialGradient(
+          player.x + player.width / 2,
+          player.y + player.height / 2,
+          0,
+          player.x + player.width / 2,
+          player.y + player.height / 2,
+          shieldRadius
+        )
+        gradient.addColorStop(0, 'rgba(96, 165, 250, 0.3)') // blue-400
+        gradient.addColorStop(1, 'rgba(96, 165, 250, 0.05)')
+        ctx.beginPath()
+        ctx.arc(
+          player.x + player.width / 2,
+          player.y + player.height / 2,
+          shieldRadius,
+          0,
+          Math.PI * 2
+        )
+        ctx.fillStyle = gradient
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(96, 165, 250, 0.6)'
+        ctx.lineWidth = 2
+        ctx.stroke()
+        ctx.restore()
+      }
       // Draw player
       renderPlayerShip({
         ctx,
@@ -373,48 +407,47 @@ export default function VibeSpace() {
           continue
         }
 
-        // Check collision with player
-        if (checkCollision(enemy, player)) {
-          // Update the gameOver ref and state
-          gameOverRef.current = true
-          setGameOver(true)
+        // Shield absorbs enemy if active and collides
+        if (shieldActiveRef.current && checkCollision(enemy, player)) {
+          shieldActiveRef.current = false;
+          setShieldActive(false);
+          lastShieldAbsorbRef.current = lastTime;
+          setShieldCooldown(1);
+          createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, enemy.width * 1.5);
+          enemies.splice(i, 1);
+          continue;
+        }
 
-          // Create explosion at player position
-          createExplosion(player.x + player.width / 2, player.y + player.height / 2, player.width * 2)
-
-          // Update the final score
-          setScore(scoreRef.current)
-
-          // Cancel animation frame
-          cancelAnimationFrame(animationFrameId)
-          return
+        // Check collision with player (if shield is not active)
+        if (!shieldActiveRef.current && checkCollision(enemy, player)) {
+          gameOverRef.current = true;
+          setGameOver(true);
+          createExplosion(player.x + player.width / 2, player.y + player.height / 2, player.width * 2);
+          setScore(scoreRef.current);
+          cancelAnimationFrame(animationFrameId);
+          return;
         }
 
         // Check collision with bullets
-        let hitByBullet = false
+        let hitByBullet = false;
         for (let j = bullets.length - 1; j >= 0; j--) {
-          const bullet = bullets[j]
+          const bullet = bullets[j];
           if (checkCollision(bullet, enemy)) {
-            enemy.health--
-            bullets.splice(j, 1)
-            hitByBullet = true
-
-            // Create small hit effect
-            createExplosion(bullet.x + bullet.width / 2, bullet.y + bullet.height / 2, 20)
-
+            enemy.health--;
+            bullets.splice(j, 1);
+            hitByBullet = true;
+            createExplosion(bullet.x + bullet.width / 2, bullet.y + bullet.height / 2, 20);
             if (enemy.health <= 0) {
-              createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, enemy.width * 1.5)
-              enemies.splice(i, 1)
-
-              // Update score ref (not state)
-              scoreRef.current += enemy.type === "planet" ? 30 : 10
+              createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, enemy.width * 1.5);
+              enemies.splice(i, 1);
+              scoreRef.current += enemy.type === "planet" ? 30 : 10;
             }
-            break
+            break;
           }
         }
 
         // Skip drawing if enemy was destroyed
-        if (hitByBullet && enemy.health <= 0) continue
+        if (hitByBullet && enemy.health <= 0) continue;
 
         // Draw enemy based on type
         if (enemy.type === "meteor") {
@@ -485,6 +518,19 @@ export default function VibeSpace() {
       // Reset screen shake
       resetScreenShake()
 
+      // Shield cooldown logic
+      if (!shieldActiveRef.current) {
+        const elapsed = timestamp - lastShieldAbsorbRef.current;
+        const progress = Math.min(1, elapsed / SHIELD_COOLDOWN_MS);
+        setShieldCooldown(progress);
+        if (elapsed >= SHIELD_COOLDOWN_MS) {
+          shieldActiveRef.current = true;
+          setShieldActive(true);
+          setShieldCooldown(1); // bar is full
+        }
+      } else {
+        setShieldCooldown(1); // bar is full when shield is active
+      }
       // Draw score with glow effect
       ctx.save()
       ctx.fillStyle = "#ffffff"
@@ -493,6 +539,22 @@ export default function VibeSpace() {
       ctx.shadowBlur = 10
       ctx.fillText(`SCORE: ${scoreRef.current}`, 20, 40)
       ctx.restore()
+      // Draw shield cooldown indicator
+      ctx.save();
+      const barWidth = 100;
+      const barHeight = 8;
+      const barX = 20;
+      const barY = 60;
+      ctx.fillStyle = 'rgba(30,58,138,0.5)';
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+      ctx.fillStyle = '#60a5fa';
+      ctx.fillRect(barX, barY, barWidth * shieldCooldown, barHeight);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.strokeRect(barX, barY, barWidth, barHeight);
+      ctx.font = '12px Arial';
+      ctx.fillStyle = '#fff';
+      ctx.fillText('SHIELD', barX, barY - 2);
+      ctx.restore();
 
       // Add vignette effect
       const vignette = ctx.createRadialGradient(
